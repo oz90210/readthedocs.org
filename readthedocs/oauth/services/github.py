@@ -13,6 +13,7 @@ from requests.exceptions import RequestException
 from readthedocs.api.v2.client import api
 from readthedocs.builds import utils as build_utils
 from readthedocs.builds.constants import (
+    BUILD_STATUS_SUCCESS,
     SELECT_BUILD_STATUS,
     RTD_BUILD_STATUS_API_NAME
 )
@@ -189,21 +190,26 @@ class GitHubService(Service):
             'events': ['push', 'pull_request', 'create', 'delete'],
         })
 
-    def setup_webhook(self, project):
+    def setup_webhook(self, project, integration=None):
         """
         Set up GitHub project webhook for project.
 
         :param project: project to set up webhook for
         :type project: Project
+        :param integration: Integration for the project
+        :type integration: Integration
         :returns: boolean based on webhook set up success, and requests Response object
         :rtype: (Bool, Response)
         """
         session = self.get_session()
         owner, repo = build_utils.get_github_username_repo(url=project.repo)
-        integration, _ = Integration.objects.get_or_create(
-            project=project,
-            integration_type=Integration.GITHUB_WEBHOOK,
-        )
+        if integration:
+            integration.recreate_secret()
+        else:
+            integration, _ = Integration.objects.get_or_create(
+                project=project,
+                integration_type=Integration.GITHUB_WEBHOOK,
+            )
         data = self.get_webhook_data(project, integration)
         resp = None
         try:
@@ -232,6 +238,9 @@ class GitHubService(Service):
                     'permissions: project=%s',
                     project,
                 )
+                # Set the secret to None so that the integration can be used manually.
+                integration.secret = None
+                integration.save()
                 return (False, resp)
         # Catch exceptions with request or deserializing JSON
         except (RequestException, ValueError):
@@ -270,9 +279,9 @@ class GitHubService(Service):
         session = self.get_session()
         integration.recreate_secret()
         data = self.get_webhook_data(project, integration)
-        url = integration.provider_data.get('url')
         resp = None
         try:
+            url = integration.provider_data.get('url')
             resp = session.patch(
                 url,
                 data=data,
@@ -295,11 +304,12 @@ class GitHubService(Service):
                 return self.setup_webhook(project)
 
         # Catch exceptions with request or deserializing JSON
-        except (RequestException, ValueError):
+        except (AttributeError, RequestException, ValueError):
             log.exception(
                 'GitHub webhook update failed for project: %s',
                 project,
             )
+            return (False, resp)
         else:
             log.error(
                 'GitHub webhook update failed for project: %s',
@@ -315,7 +325,7 @@ class GitHubService(Service):
             )
             return (False, resp)
 
-    def send_build_status(self, build, state):
+    def send_build_status(self, build, commit, state):
         """
         Create GitHub commit status for project.
 
@@ -323,21 +333,27 @@ class GitHubService(Service):
         :type build: Build
         :param state: build state failure, pending, or success.
         :type state: str
+        :param commit: commit sha of the pull request
+        :type commit: str
         :returns: boolean based on commit status creation was successful or not.
         :rtype: Bool
         """
         session = self.get_session()
         project = build.project
         owner, repo = build_utils.get_github_username_repo(url=project.repo)
-        build_sha = build.version.identifier
 
         # select the correct state and description.
         github_build_state = SELECT_BUILD_STATUS[state]['github']
         description = SELECT_BUILD_STATUS[state]['description']
 
+        target_url = build.get_full_url()
+
+        if state == BUILD_STATUS_SUCCESS:
+            target_url = build.version.get_absolute_url()
+
         data = {
             'state': github_build_state,
-            'target_url': build.get_full_url(),
+            'target_url': target_url,
             'description': description,
             'context': RTD_BUILD_STATUS_API_NAME
         }
@@ -346,7 +362,7 @@ class GitHubService(Service):
 
         try:
             resp = session.post(
-                f'https://api.github.com/repos/{owner}/{repo}/statuses/{build_sha}',
+                f'https://api.github.com/repos/{owner}/{repo}/statuses/{commit}',
                 data=json.dumps(data),
                 headers={'content-type': 'application/json'},
             )

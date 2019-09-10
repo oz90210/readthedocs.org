@@ -226,12 +226,14 @@ class Service:
         """
         raise NotImplementedError
 
-    def setup_webhook(self, project):
+    def setup_webhook(self, project, integration=None):
         """
         Setup webhook for project.
 
         :param project: project to set up webhook for
         :type project: Project
+        :param integration: Integration for the project
+        :type integration: Integration
         :returns: boolean based on webhook set up success, and requests Response object
         :rtype: (Bool, Response)
         """
@@ -250,12 +252,14 @@ class Service:
         """
         raise NotImplementedError
 
-    def send_build_status(self, build, state):
+    def send_build_status(self, build, commit, state):
         """
         Create commit status for project.
 
         :param build: Build to set up commit status for
         :type build: Build
+        :param commit: commit sha of the pull/merge request
+        :type commit: str
         :param state: build state failure, pending, or success.
         :type state: str
         :returns: boolean based on commit status creation was successful or not.

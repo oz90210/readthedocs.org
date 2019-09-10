@@ -181,13 +181,6 @@ class TestGitBackend(RTDTestCase):
         repo.update()
         repo.checkout('submodule')
         self.assertTrue(repo.are_submodules_available(self.dummy_conf))
-        fixture.get(
-            Feature,
-            projects=[self.project],
-            feature_id=Feature.SKIP_SUBMODULES,
-        )
-        self.assertTrue(self.project.has_feature(Feature.SKIP_SUBMODULES))
-        self.assertFalse(repo.are_submodules_available(self.dummy_conf))
 
     def test_use_shallow_clone(self):
         repo = self.project.vcs_repo()
@@ -222,11 +215,13 @@ class TestGitBackend(RTDTestCase):
             RepositoryError.INVALID_SUBMODULES.format(['invalid']),
         )
 
-    def test_invalid_submodule_path(self):
-        repo_path = self.project.repo
-        gitmodules_path = os.path.join(repo_path, '.gitmodules')
+    def test_invalid_submodule_is_ignored(self):
+        repo = self.project.vcs_repo()
+        repo.update()
+        repo.checkout('submodule')
+        gitmodules_path = os.path.join(repo.working_dir, '.gitmodules')
 
-        with open(gitmodules_path, 'w+') as f:
+        with open(gitmodules_path, 'a') as f:
             content = textwrap.dedent("""
                 [submodule "not-valid-path"]
                     path = not-valid-path
@@ -234,10 +229,9 @@ class TestGitBackend(RTDTestCase):
             """)
             f.write(content)
 
-        repo = self.project.vcs_repo()
-        repo.working_dir = repo_path
-        with self.assertRaises(RepositoryError, msg=RepositoryError.INVALID_SUBMODULES_PATH):
-            repo.update_submodules(self.dummy_conf)
+        valid, submodules = repo.validate_submodules(self.dummy_conf)
+        self.assertTrue(valid)
+        self.assertEqual(list(submodules), ['foobar'])
 
     @patch('readthedocs.projects.models.Project.checkout_path')
     def test_fetch_clean_tags_and_branches(self, checkout_path):
